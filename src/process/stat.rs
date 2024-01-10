@@ -3,19 +3,15 @@ use super::StatFlags;
 #[cfg(feature = "chrono")]
 use crate::TICKS_PER_SECOND;
 use crate::{from_iter, KernelVersion, ProcResult};
-use crate::{ProcError, KERNEL, PAGESIZE};
+use crate::{KERNEL, PAGESIZE};
 
 use std::io::Read;
 use std::str::FromStr;
 
 macro_rules! since_kernel {
     ($a:tt, $b:tt, $c:tt, $e:expr) => {
-        if let Ok(kernel) = *KERNEL {
-            if kernel >= KernelVersion::new($a, $b, $c) {
-                Some($e)
-            } else {
-                None
-            }
+        if *KERNEL >= KernelVersion::new($a, $b, $c) {
+            Some($e)
         } else {
             None
         }
@@ -212,31 +208,31 @@ pub struct Stat {
     /// Address above which program initialized and uninitialized (BSS) data are placed.
     ///
     /// (since Linux 3.3)
-    pub start_data: Option<u64>,
+    pub start_data: Option<usize>,
     /// Address below which program initialized and uninitialized (BSS) data are placed.
     ///
     /// (since Linux 3.3)
-    pub end_data: Option<u64>,
+    pub end_data: Option<usize>,
     /// Address above which program heap can be expanded with brk(2).
     ///
     /// (since Linux 3.3)
-    pub start_brk: Option<u64>,
+    pub start_brk: Option<usize>,
     /// Address above which program command-line arguments (argv) are placed.
     ///
     /// (since Linux 3.5)
-    pub arg_start: Option<u64>,
+    pub arg_start: Option<usize>,
     /// Address below program command-line arguments (argv) are placed.
     ///
     /// (since Linux 3.5)
-    pub arg_end: Option<u64>,
+    pub arg_end: Option<usize>,
     /// Address above which program environment is placed.
     ///
     /// (since Linux 3.5)
-    pub env_start: Option<u64>,
+    pub env_start: Option<usize>,
     /// Address below which program environment is placed.
     ///
     /// (since Linux 3.5)
-    pub env_end: Option<u64>,
+    pub env_end: Option<usize>,
     /// The thread's exit status in the form reported by waitpid(2).
     ///
     /// (since Linux 3.5)
@@ -404,10 +400,7 @@ impl Stat {
     /// This function requires the "chrono" features to be enabled (which it is by default).
     #[cfg(feature = "chrono")]
     pub fn starttime(&self) -> ProcResult<chrono::DateTime<chrono::Local>> {
-        let tts = TICKS_PER_SECOND
-            .as_ref()
-            .map_err(|e| ProcError::Other(format!("Failed to get ticks_per_second: {:?}", e)))?;
-        let seconds_since_boot = self.starttime as f32 / *tts as f32;
+        let seconds_since_boot = self.starttime as f32 / *TICKS_PER_SECOND as f32;
         let boot_time = crate::boot_time()?;
 
         Ok(boot_time + chrono::Duration::milliseconds((seconds_since_boot * 1000.0) as i64))
@@ -416,10 +409,7 @@ impl Stat {
     /// Gets the Resident Set Size (in bytes)
     ///
     /// The `rss` field will return the same value in pages
-    pub fn rss_bytes(&self) -> ProcResult<i64> {
-        let pagesize = PAGESIZE
-            .as_ref()
-            .map_err(|e| ProcError::Other(format!("Failed to get pagesize: {:?}", e)))?;
-        Ok(self.rss * *pagesize)
+    pub fn rss_bytes(&self) -> i64 {
+        self.rss * *PAGESIZE
     }
 }

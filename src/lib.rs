@@ -2,9 +2,6 @@
 // The suggested fix with `strip_prefix` removes support for Rust 1.33 and 1.38
 #![allow(clippy::unknown_clippy_lints)]
 #![allow(clippy::manual_strip)]
-#![allow(clippy::from_str_radix_10)]
-// `#[non_exhaustive]` require Rust 1.40+ but procfs minimal Rust version is 1.34
-#![allow(clippy::manual_non_exhaustive)]
 // Don't throw rustc lint warnings for the deprecated name `intra_doc_link_resolution_failure`.
 // The suggested rename to `broken_intra_doc_links` removes support for Rust 1.33 and 1.38.
 #![allow(renamed_and_removed_lints)]
@@ -44,7 +41,6 @@
 //! The following cargo features are available:
 //!
 //! * `chrono` -- Default.  Optional.  This feature enables a few methods that return values as `DateTime` objects.
-//! * `flate2` -- Default.  Optional.  This feature enables parsing gzip compressed `/proc/config.gz` file via the `procfs::kernel_config` method.
 //! * `backtrace` -- Optional.  This feature lets you get a stack trace whenever an `InternalError` is raised.
 //!
 //! # Examples
@@ -138,6 +134,7 @@ impl<T, E> IntoResult<T, E> for Result<T, E> {
     }
 }
 
+#[macro_use]
 #[allow(unused_macros)]
 macro_rules! proc_panic {
     ($e:expr) => {
@@ -174,6 +171,7 @@ macro_rules! expect {
     };
 }
 
+#[macro_use]
 macro_rules! from_str {
     ($t:tt, $e:expr) => {{
         let e = $e;
@@ -230,7 +228,7 @@ pub(crate) fn read_file<P: AsRef<Path>>(path: P) -> ProcResult<String> {
 }
 
 pub(crate) fn write_file<P: AsRef<Path>, T: AsRef<[u8]>>(path: P, buf: T) -> ProcResult<()> {
-    let mut f = OpenOptions::new().read(false).write(true).open(path)?;
+    let mut f = OpenOptions::new().write(true).open(path)?;
     f.write_all(buf.as_ref())?;
     Ok(())
 }
@@ -268,9 +266,6 @@ pub mod process;
 mod meminfo;
 pub use crate::meminfo::*;
 
-mod sysvipc_shm;
-pub use crate::sysvipc_shm::*;
-
 pub mod net;
 
 mod cpuinfo;
@@ -280,8 +275,6 @@ mod cgroups;
 pub use crate::cgroups::*;
 
 pub mod sys;
-pub use crate::sys::kernel::BuildInfo as KernelBuildInfo;
-pub use crate::sys::kernel::Type as KernelType;
 pub use crate::sys::kernel::Version as KernelVersion;
 
 mod pressure;
@@ -295,28 +288,25 @@ pub use locks::*;
 
 pub mod keyring;
 
-mod uptime;
-pub use uptime::*;
-
 lazy_static! {
     /// The number of clock ticks per second.
     ///
     /// This is calculated from `sysconf(_SC_CLK_TCK)`.
-    static ref TICKS_PER_SECOND: ProcResult<i64> = {
-        Ok(ticks_per_second()?)
+    static ref TICKS_PER_SECOND: i64 = {
+        ticks_per_second().unwrap()
     };
     /// The version of the currently running kernel.
     ///
     /// This is a lazily constructed static.  You can also get this information via
     /// [KernelVersion::new()].
-    static ref KERNEL: ProcResult<KernelVersion> = {
-        KernelVersion::current()
+    static ref KERNEL: KernelVersion = {
+        KernelVersion::current().unwrap()
     };
     /// Memory page size, in bytes.
     ///
     /// This is calculated from `sysconf(_SC_PAGESIZE)`.
-    static ref PAGESIZE: ProcResult<i64> = {
-        Ok(page_size()?)
+    static ref PAGESIZE: i64 = {
+        page_size().unwrap()
     };
 }
 
@@ -487,9 +477,13 @@ impl From<std::io::Error> for ProcError {
     fn from(io: std::io::Error) -> Self {
         use std::io::ErrorKind;
         let kind = io.kind();
-        let path: Option<PathBuf> = io
-            .get_ref()
-            .and_then(|inner| inner.downcast_ref::<IoErrorWrapper>().map(|inner| inner.path.clone()));
+        let path: Option<PathBuf> = io.get_ref().and_then(|inner| {
+            if let Some(ref inner) = inner.downcast_ref::<IoErrorWrapper>() {
+                Some(inner.path.clone())
+            } else {
+                None
+            }
+        });
         match kind {
             ErrorKind::PermissionDenied => ProcError::PermissionDenied(path),
             ErrorKind::NotFound => ProcError::NotFound(path),
@@ -544,7 +538,7 @@ impl std::error::Error for ProcError {}
 ///
 /// Load averages are calculated as the number of jobs in the run queue (state R) or waiting for
 /// disk I/O (state D) averaged over 1, 5, and 15 minutes.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct LoadAverage {
     /// The one-minute load average
     pub one: f32,
@@ -597,10 +591,7 @@ pub fn ticks_per_second() -> std::io::Result<i64> {
     if cfg!(unix) {
         match unsafe { sysconf(_SC_CLK_TCK) } {
             -1 => Err(std::io::Error::last_os_error()),
-            #[cfg(target_pointer_width = "64")]
-            x => Ok(x),
-            #[cfg(target_pointer_width = "32")]
-            x => Ok(x.into())
+            x => Ok(x.into()),
         }
     } else {
         panic!("Not supported on non-unix platforms")
@@ -656,17 +647,15 @@ pub fn page_size() -> std::io::Result<i64> {
     if cfg!(unix) {
         match unsafe { sysconf(_SC_PAGESIZE) } {
             -1 => Err(std::io::Error::last_os_error()),
-            #[cfg(target_pointer_width = "64")]
-            x => Ok(x),
-            #[cfg(target_pointer_width = "32")]
-            x => Ok(x.into())        }
+            x => Ok(x.into()),
+        }
     } else {
         panic!("Not supported on non-unix platforms")
     }
 }
 
 /// Possible values for a kernel config option
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum ConfigSetting {
     Yes,
     Module,
@@ -676,24 +665,13 @@ pub enum ConfigSetting {
 ///
 /// If CONFIG_KCONFIG_PROC is available, the config is read from `/proc/config.gz`.
 /// Else look in `/boot/config-$(uname -r)` or `/boot/config` (in that order).
-///
-/// # Notes
-/// Reading the compress `/proc/config.gz` is only supported if the `flate2` feature is enabled
-/// (which it is by default).
-#[cfg_attr(feature = "flate2", doc = "The flate2 feature is currently enabled")]
-#[cfg_attr(not(feature = "flate2"), doc = "The flate2 feature is NOT currently enabled")]
 pub fn kernel_config() -> ProcResult<HashMap<String, ConfigSetting>> {
-    let reader: Box<dyn BufRead> = if Path::new(PROC_CONFIG_GZ).exists() && cfg!(feature = "flate2") {
-        #[cfg(feature = "flate2")]
-        {
-            let file = FileWrapper::open(PROC_CONFIG_GZ)?;
-            let decoder = flate2::read::GzDecoder::new(file);
-            Box::new(BufReader::new(decoder))
-        }
-        #[cfg(not(feature = "flate2"))]
-        {
-            unreachable!("flate2 feature not enabled")
-        }
+    use flate2::read::GzDecoder;
+
+    let reader: Box<dyn BufRead> = if Path::new(PROC_CONFIG_GZ).exists() {
+        let file = FileWrapper::open(PROC_CONFIG_GZ)?;
+        let decoder = GzDecoder::new(file);
+        Box::new(BufReader::new(decoder))
     } else {
         let mut kernel: libc::utsname = unsafe { mem::zeroed() };
 
@@ -746,7 +724,7 @@ pub fn kernel_config() -> ProcResult<HashMap<String, ConfigSetting>> {
 
 /// To convert this value to seconds, you can divide by the tps.  There are also convenience methods
 /// that you can use too.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CpuTime {
     /// Ticks spent in user mode
     pub user: u64,
@@ -887,7 +865,7 @@ impl CpuTime {
 
     /// Time spent waiting for I/O to complete
     pub fn iowait_duration(&self) -> Option<Duration> {
-        self.iowait_ms().map(Duration::from_millis)
+        self.iowait_ms().map(|io| Duration::from_millis(io))
     }
 
     /// Milliseconds spent servicing interrupts
@@ -898,7 +876,7 @@ impl CpuTime {
 
     /// Time spent servicing interrupts
     pub fn irq_duration(&self) -> Option<Duration> {
-        self.irq_ms().map(Duration::from_millis)
+        self.irq_ms().map(|ms| Duration::from_millis(ms))
     }
 
     /// Milliseconds spent servicing softirqs
@@ -909,7 +887,7 @@ impl CpuTime {
 
     /// Time spent servicing softirqs
     pub fn softirq_duration(&self) -> Option<Duration> {
-        self.softirq_ms().map(Duration::from_millis)
+        self.softirq_ms().map(|ms| Duration::from_millis(ms))
     }
 
     /// Milliseconds of stolen time
@@ -920,7 +898,7 @@ impl CpuTime {
 
     /// Amount of stolen time
     pub fn steal_duration(&self) -> Option<Duration> {
-        self.steal_ms().map(Duration::from_millis)
+        self.steal_ms().map(|ms| Duration::from_millis(ms))
     }
 
     /// Milliseconds spent running a virtual CPU for guest operating systems under control of the linux kernel
@@ -931,7 +909,7 @@ impl CpuTime {
 
     /// Time spent running a virtual CPU for guest operating systems under control of the linux kernel
     pub fn guest_duration(&self) -> Option<Duration> {
-        self.guest_ms().map(Duration::from_millis)
+        self.guest_ms().map(|ms| Duration::from_millis(ms))
     }
 
     /// Milliseconds spent running a niced guest
@@ -942,12 +920,12 @@ impl CpuTime {
 
     /// Time spent running a niced guest
     pub fn guest_nice_duration(&self) -> Option<Duration> {
-        self.guest_nice_ms().map(Duration::from_millis)
+        self.guest_nice_ms().map(|ms| Duration::from_millis(ms))
     }
 }
 
 /// Kernel/system statistics, from `/proc/stat`
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct KernelStats {
     /// The amount of time the system spent in various states
     pub total: CpuTime,
@@ -978,8 +956,8 @@ impl KernelStats {
     pub fn new() -> ProcResult<KernelStats> {
         KernelStats::from_reader(FileWrapper::open("/proc/stat")?)
     }
-    /// Get KernelStatus from a custom Read instead of the default `/proc/stat`.
-    pub fn from_reader<R: io::Read>(r: R) -> ProcResult<KernelStats> {
+
+    fn from_reader<R: io::Read>(r: R) -> ProcResult<KernelStats> {
         let bufread = BufReader::new(r);
         let lines = bufread.lines();
 
@@ -1051,7 +1029,7 @@ pub fn vmstat() -> ProcResult<HashMap<String, i64>> {
 ///
 /// For an example, see the [lsmod.rs](https://github.com/eminence/procfs/tree/master/examples)
 /// example in the source repo.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct KernelModule {
     /// The name of the module
     pub name: String,
@@ -1147,11 +1125,6 @@ mod tests {
         assert_eq!(k.major, 4);
         assert_eq!(k.minor, 9);
         assert_eq!(k.patch, 16);
-
-        let k = KernelVersion::from_str("4.9.266-0.1.ac.225.84.332.metal1.x86_64").unwrap();
-        assert_eq!(k.major, 4);
-        assert_eq!(k.minor, 9);
-        assert_eq!(k.patch, 266);
     }
 
     #[test]

@@ -24,7 +24,7 @@ use super::{convert_to_kibibytes, FileWrapper, ProcResult};
 /// programs rely on /proc/meminfo to specify size with the "kB" string.
 ///
 /// New fields to this struct may be added at any time (even without a major or minor semver bump).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[allow(non_snake_case)]
 pub struct Meminfo {
     // this private field prevents clients from directly constructing this object.
@@ -286,8 +286,7 @@ impl Meminfo {
         Meminfo::from_reader(f)
     }
 
-    /// Get Meminfo from a custom Read instead of the default `/proc/meminfo`.
-    pub fn from_reader<R: io::Read>(r: R) -> ProcResult<Meminfo> {
+    fn from_reader<R: io::Read>(r: R) -> ProcResult<Meminfo> {
         use std::collections::HashMap;
         use std::io::{BufRead, BufReader};
 
@@ -382,7 +381,9 @@ impl Meminfo {
             file_huge_pages: map.remove("FileHugePages"),
         };
 
-        assert!(!(cfg!(test) && !map.is_empty()), "meminfo map is not empty: {:#?}", map);
+        if cfg!(test) && !map.is_empty() {
+            panic!("meminfo map is not empty: {:#?}", map);
+        }
 
         Ok(meminfo)
     }
@@ -394,7 +395,6 @@ mod test {
     use crate::{kernel_config, KernelVersion};
 
     #[allow(clippy::cognitive_complexity)]
-    #[allow(clippy::blocks_in_if_conditions)]
     #[test]
     fn test_meminfo() {
         // TRAVIS

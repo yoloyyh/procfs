@@ -1,5 +1,6 @@
 // Don't throw clippy warnings for manual string stripping.
 // The suggested fix with `strip_prefix` removes support for Rust 1.33 and 1.38
+#![allow(clippy::unknown_clippy_lints)]
 #![allow(clippy::manual_strip)]
 
 //! Information about the networking layer.
@@ -21,7 +22,7 @@
 //! let all_procs = procfs::process::all_processes().unwrap();
 //!
 //! // build up a map between socket inodes and processes:
-//! let mut map: HashMap<u64, &Process> = HashMap::new();
+//! let mut map: HashMap<u32, &Process> = HashMap::new();
 //! for process in &all_procs {
 //!     if let Ok(fds) = process.fd() {
 //!         for fd in fds {
@@ -59,7 +60,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::{path::PathBuf, str::FromStr};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum TcpState {
     Established = 1,
     SynSent,
@@ -112,7 +113,7 @@ impl TcpState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum UdpState {
     Established = 1,
     Close = 7,
@@ -135,7 +136,7 @@ impl UdpState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum UnixState {
     UNCONNECTED = 1,
     CONNECTING = 2,
@@ -165,29 +166,29 @@ impl UnixState {
 }
 
 /// An entry in the TCP socket table
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TcpNetEntry {
     pub local_address: SocketAddr,
     pub remote_address: SocketAddr,
     pub state: TcpState,
     pub rx_queue: u32,
     pub tx_queue: u32,
-    pub inode: u64,
+    pub inode: u32,
 }
 
 /// An entry in the UDP socket table
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct UdpNetEntry {
     pub local_address: SocketAddr,
     pub remote_address: SocketAddr,
     pub state: UdpState,
     pub rx_queue: u32,
     pub tx_queue: u32,
-    pub inode: u64,
+    pub inode: u32,
 }
 
 /// An entry in the Unix socket table
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct UnixNetEntry {
     /// The number of users of the socket
     pub ref_count: u32,
@@ -199,7 +200,7 @@ pub struct UnixNetEntry {
     /// The state of the socket
     pub state: UnixState,
     /// The inode number of the socket
-    pub inode: u64,
+    pub inode: u32,
     /// The bound pathname (if any) of the socket.
     ///
     /// Sockets in the abstract namespace are included, and are shown with a path that commences
@@ -283,7 +284,7 @@ pub fn read_tcp_table<R: Read>(reader: BufReader<R>) -> ProcResult<Vec<TcpNetEnt
             rx_queue,
             tx_queue,
             state: expect!(TcpState::from_u8(from_str!(u8, state, 16))),
-            inode: from_str!(u64, inode),
+            inode: from_str!(u32, inode),
         });
     }
 
@@ -317,7 +318,7 @@ pub fn read_udp_table<R: Read>(reader: BufReader<R>) -> ProcResult<Vec<UdpNetEnt
             rx_queue,
             tx_queue,
             state: expect!(UdpState::from_u8(from_str!(u8, state, 16))),
-            inode: from_str!(u64, inode),
+            inode: from_str!(u32, inode),
         });
     }
 
@@ -369,7 +370,7 @@ pub fn unix() -> ProcResult<Vec<UnixNetEntry>> {
         s.next(); // skip internal kernel flags
         let socket_type = from_str!(u16, expect!(s.next()), 16);
         let state = from_str!(u8, expect!(s.next()), 16);
-        let inode = from_str!(u64, expect!(s.next()));
+        let inode = from_str!(u32, expect!(s.next()));
         let path = s.next().map(PathBuf::from);
 
         vec.push(UnixNetEntry {
@@ -385,7 +386,7 @@ pub fn unix() -> ProcResult<Vec<UnixNetEntry>> {
 }
 
 /// An entry in the ARP table
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ARPEntry {
     /// IPv4 address
     pub ip_address: Ipv4Addr,
@@ -627,74 +628,6 @@ pub fn dev_status() -> ProcResult<HashMap<String, DeviceStatus>> {
     Ok(map)
 }
 
-/// An entry in the ipv4 route table
-#[derive(Debug, Clone)]
-pub struct RouteEntry {
-    /// Interface to which packets for this route will be sent
-    pub iface: String,
-    /// The destination network or destination host
-    pub destination: Ipv4Addr,
-    pub gateway: Ipv4Addr,
-    pub flags: u16,
-    /// Number of references to this route
-    pub refcnt: u16,
-    /// Count of lookups for the route
-    pub in_use: u16,
-    /// The 'distance' to the target (usually counted in hops)
-    pub metrics: u32,
-    pub mask: Ipv4Addr,
-    /// Default maximum transmission unit for TCP connections over this route
-    pub mtu: u32,
-    /// Default window size for TCP connections over this route
-    pub window: u32,
-    /// Initial RTT (Round Trip Time)
-    pub irtt: u32,
-}
-
-/// Reads the ipv4 route table
-///
-/// This data is from the `/proc/net/route` file
-pub fn route() -> ProcResult<Vec<RouteEntry>> {
-    let file = FileWrapper::open("/proc/net/route")?;
-    let reader = BufReader::new(file);
-
-    let mut vec = Vec::new();
-
-    // First line is a header we need to skip
-    for line in reader.lines().skip(1) {
-        // Check if there might have been an IO error.
-        let line = line?;
-        let mut line = line.split_whitespace();
-        // network interface name, e.g. eth0
-        let iface = expect!(line.next());
-        let destination = from_str!(u32, expect!(line.next()), 16).to_ne_bytes().into();
-        let gateway = from_str!(u32, expect!(line.next()), 16).to_ne_bytes().into();
-        let flags = from_str!(u16, expect!(line.next()), 16);
-        let refcnt = from_str!(u16, expect!(line.next()), 10);
-        let in_use = from_str!(u16, expect!(line.next()), 10);
-        let metrics = from_str!(u32, expect!(line.next()), 10);
-        let mask = from_str!(u32, expect!(line.next()), 16).to_ne_bytes().into();
-        let mtu = from_str!(u32, expect!(line.next()), 10);
-        let window = from_str!(u32, expect!(line.next()), 10);
-        let irtt = from_str!(u32, expect!(line.next()), 10);
-        vec.push(RouteEntry {
-            iface: iface.to_string(),
-            destination,
-            gateway,
-            flags,
-            refcnt,
-            in_use,
-            metrics,
-            mask,
-            mtu,
-            window,
-            irtt,
-        });
-    }
-
-    Ok(vec)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -785,13 +718,6 @@ mod tests {
     #[test]
     fn test_arp() {
         for entry in arp().unwrap() {
-            println!("{:?}", entry);
-        }
-    }
-
-    #[test]
-    fn test_route() {
-        for entry in route().unwrap() {
             println!("{:?}", entry);
         }
     }

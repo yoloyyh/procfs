@@ -55,10 +55,8 @@
 use super::*;
 use crate::from_iter;
 
-use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fs;
-use std::fs::read_link;
 use std::io::{self, Read};
 #[cfg(target_os = "android")]
 use std::os::android::fs::MetadataExt;
@@ -76,9 +74,6 @@ pub use stat::*;
 mod mount;
 pub use mount::*;
 
-mod namespaces;
-pub use namespaces::*;
-
 mod status;
 pub use status::*;
 
@@ -87,6 +82,9 @@ pub use schedstat::*;
 
 mod task;
 pub use task::*;
+
+mod namespace;
+pub use namespace::Namespaces;
 
 // provide a type-compatible st_uid for windows
 #[cfg(windows)]
@@ -466,8 +464,6 @@ pub enum MMapPath {
     Vsyscall,
     /// An anonymous mapping as obtained via mmap(2).
     Anonymous,
-    /// Shared memory segment
-    Vsys(i32),
     /// Some other pseudo-path
     Other(String),
 }
@@ -492,7 +488,6 @@ impl MMapPath {
                 MMapPath::TStack(tid)
             }
             x if x.starts_with('[') && x.ends_with(']') => MMapPath::Other(x[1..x.len() - 1].to_string()),
-            x if x.starts_with("/SYSV") => MMapPath::Vsys(u32::from_str_radix(&x[5..13], 16)? as i32), // 32bits signed hex. /SYSVaabbccdd (deleted)
             x => MMapPath::Path(PathBuf::from(x)),
         })
     }
@@ -596,7 +591,9 @@ impl Io {
             cancelled_write_bytes: expect!(map.remove("cancelled_write_bytes")),
         };
 
-        assert!(!(cfg!(test) && !map.is_empty()), "io map is not empty: {:#?}", map);
+        if cfg!(test) && !map.is_empty() {
+            panic!("io map is not empty: {:#?}", map);
+        }
 
         Ok(io)
     }
@@ -610,15 +607,15 @@ pub enum FDTarget {
     /// A file or device
     Path(PathBuf),
     /// A socket type, with an inode
-    Socket(u64),
-    Net(u64),
-    Pipe(u64),
+    Socket(u32),
+    Net(u32),
+    Pipe(u32),
     /// A file descriptor that have no corresponding inode.
     AnonInode(String),
     /// A memfd file descriptor with a name.
     MemFD(String),
     /// Some other file descriptor type, with an inode.
-    Other(String, u64),
+    Other(String, u32),
 }
 
 impl FromStr for FDTarget {
@@ -643,17 +640,17 @@ impl FromStr for FDTarget {
             match fd_type {
                 "socket" => {
                     let inode = expect!(s.next(), "socket inode");
-                    let inode = expect!(u64::from_str_radix(strip_first_last(inode)?, 10));
+                    let inode = expect!(u32::from_str_radix(strip_first_last(inode)?, 10));
                     Ok(FDTarget::Socket(inode))
                 }
                 "net" => {
                     let inode = expect!(s.next(), "net inode");
-                    let inode = expect!(u64::from_str_radix(strip_first_last(inode)?, 10));
+                    let inode = expect!(u32::from_str_radix(strip_first_last(inode)?, 10));
                     Ok(FDTarget::Net(inode))
                 }
                 "pipe" => {
                     let inode = expect!(s.next(), "pipe inode");
-                    let inode = expect!(u64::from_str_radix(strip_first_last(inode)?, 10));
+                    let inode = expect!(u32::from_str_radix(strip_first_last(inode)?, 10));
                     Ok(FDTarget::Pipe(inode))
                 }
                 "anon_inode" => Ok(FDTarget::AnonInode(expect!(s.next(), "anon inode").to_string())),
@@ -661,7 +658,7 @@ impl FromStr for FDTarget {
                 "" => Err(ProcError::Incomplete(None)),
                 x => {
                     let inode = expect!(s.next(), "other inode");
-                    let inode = expect!(u64::from_str_radix(strip_first_last(inode)?, 10));
+                    let inode = expect!(u32::from_str_radix(strip_first_last(inode)?, 10));
                     Ok(FDTarget::Other(x.to_string(), inode))
                 }
             }
@@ -685,24 +682,6 @@ pub struct FDInfo {
 }
 
 impl FDInfo {
-    /// Gets a file descriptor from a raw fd
-    pub fn from_raw_fd(pid: pid_t, raw_fd: i32) -> ProcResult<Self> {
-        Self::from_raw_fd_with_root("/proc", pid, raw_fd)
-    }
-
-    /// Gets a file descriptor from a raw fd based on a specified `/proc` path
-    pub fn from_raw_fd_with_root(root: impl AsRef<Path>, pid: pid_t, raw_fd: i32) -> ProcResult<Self> {
-        let path = root.as_ref().join(pid.to_string()).join("fd").join(raw_fd.to_string());
-        let link = wrap_io_error!(path, read_link(&path))?;
-        let md = wrap_io_error!(path, path.symlink_metadata())?;
-        let link_os: &OsStr = link.as_ref();
-        Ok(Self {
-            fd: raw_fd as u32,
-            mode: (md.st_mode() as libc::mode_t) & libc::S_IRWXU,
-            target: expect!(FDTarget::from_str(expect!(link_os.to_str()))),
-        })
-    }
-
     /// Gets the read/write mode of this file descriptor as a bitfield
     pub fn mode(&self) -> FDPermissions {
         FDPermissions::from_bits_truncate(self.mode)
@@ -838,6 +817,7 @@ impl Process {
     /// Gets the current environment for the process.  This is done by reading the
     /// `/proc/pid/environ` file.
     pub fn environ(&self) -> ProcResult<HashMap<OsString, OsString>> {
+        use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
 
         let mut map = HashMap::new();
@@ -950,14 +930,14 @@ impl Process {
                         // supposedly responsible for creating smaps, has lead me to believe that the only size suffixes we'll ever encounter
                         // "kB", which is most likely kibibytes. Actually checking if the size suffix is any of the above is a way to
                         // future-proof the code, but I am not sure it is worth doing so.
-                        let size_multiplier = if size_suffix.is_some() { 1024 } else { 1 };
+                        let size_multiplier = if let Some(_) = size_suffix { 1024 } else { 1 };
 
                         let v = v.parse::<u64>().map_err(|_| {
                             ProcError::Other("Value in `Key: Value` pair was not actually a number".into())
                         })?;
 
                         // This ignores the case when our Key: Value pairs are really Key Value pairs. Is this a good idea?
-                        let k = k.trim_end_matches(':');
+                        let k = k.trim_end_matches(":");
 
                         current_data.map.insert(k.into(), v * size_multiplier);
                     }
@@ -977,6 +957,9 @@ impl Process {
 
     /// Gets a list of open file descriptors for a process
     pub fn fd(&self) -> ProcResult<Vec<FDInfo>> {
+        use std::ffi::OsStr;
+        use std::fs::read_link;
+
         let mut vec = Vec::new();
 
         let path = self.root.join("fd");
@@ -997,6 +980,11 @@ impl Process {
             }
         }
         Ok(vec)
+    }
+
+    /// Gets a Struct of namespaces for a process
+    pub fn ns(&self) -> ProcResult<Namespaces> {
+	Namespaces::namespaces(self.pid)
     }
 
     /// Lists which memory segments are written to the core dump in the event that a core dump is performed.
@@ -1121,7 +1109,7 @@ impl Process {
 
     /// Return a task for the main thread of this process
     pub fn task_main_thread(&self) -> ProcResult<Task> {
-        Task::new(self.pid, self.pid)
+        Task::from_rel_path(self.pid, Path::new(&format!("{}", self.pid)))
     }
 
     /// Return the `Schedstat` for this process, based on the `/proc/<pid>/schedstat` file.
@@ -1258,7 +1246,7 @@ impl std::iter::Iterator for TasksIter {
     fn next(&mut self) -> Option<ProcResult<Task>> {
         match self.inner.next() {
             Some(Ok(tp)) => Some(Task::from_rel_path(self.pid, &tp.path())),
-            Some(Err(e)) => Some(Err(ProcError::Io(e, None))),
+            Some(Err(e)) => Some(Err(ProcError::Io(e.into(), None))),
             None => None,
         }
     }
@@ -1268,21 +1256,15 @@ impl std::iter::Iterator for TasksIter {
 ///
 /// If a process can't be constructed for some reason, it won't be returned in the list.
 pub fn all_processes() -> ProcResult<Vec<Process>> {
-    all_processes_with_root("/proc")
-}
-
-/// Return a list of all processes based on a specified `/proc` path
-///
-/// If a process can't be constructed for some reason, it won't be returned in the list.
-pub fn all_processes_with_root(root: impl AsRef<Path>) -> ProcResult<Vec<Process>> {
     let mut v = Vec::new();
-    let root = root.as_ref();
-    for entry in expect!(std::fs::read_dir(root), format!("No {} directory", root.display())).flatten() {
-        if i32::from_str(&entry.file_name().to_string_lossy()).is_ok() {
-            match Process::new_with_root(entry.path()) {
-                Ok(prc) => v.push(prc),
-                Err(ProcError::InternalError(e)) => return Err(ProcError::InternalError(e)),
-                _ => {}
+    for dir in expect!(std::fs::read_dir("/proc/"), "No /proc/ directory") {
+        if let Ok(entry) = dir {
+            if let Ok(pid) = i32::from_str(&entry.file_name().to_string_lossy()) {
+                match Process::new(pid) {
+                    Ok(prc) => v.push(prc),
+                    Err(ProcError::InternalError(e)) => return Err(ProcError::InternalError(e)),
+                    _ => {}
+                }
             }
         }
     }

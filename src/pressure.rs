@@ -11,7 +11,7 @@ use std::collections::HashMap;
 /// Pressure stall information for either CPU, memory, or IO.
 ///
 /// See also: https://www.kernel.org/doc/Documentation/accounting/psi.txt
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PressureRecord {
     /// 10 second window
     ///
@@ -33,7 +33,7 @@ pub struct PressureRecord {
 }
 
 /// CPU pressure information
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CpuPressure {
     pub some: PressureRecord,
 }
@@ -57,7 +57,7 @@ impl CpuPressure {
 }
 
 /// Memory pressure information
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MemoryPressure {
     /// This record indicates the share of time in which at least some tasks are stalled
     pub some: PressureRecord,
@@ -76,7 +76,7 @@ impl MemoryPressure {
 }
 
 /// IO pressure information
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct IoPressure {
     /// This record indicates the share of time in which at least some tasks are stalled
     pub some: PressureRecord,
@@ -97,14 +97,14 @@ impl IoPressure {
 fn get_f32(map: &HashMap<&str, &str>, value: &str) -> ProcResult<f32> {
     map.get(value).map_or_else(
         || Err(ProcError::Incomplete(None)),
-        |v| v.parse::<f32>().map_err(|_| ProcError::Incomplete(None)),
+        |v| Ok(v.parse::<f32>().map_err(|_| ProcError::Incomplete(None))?),
     )
 }
 
 fn get_total(map: &HashMap<&str, &str>) -> ProcResult<u64> {
     map.get("total").map_or_else(
         || Err(ProcError::Incomplete(None)),
-        |v| v.parse::<u64>().map_err(|_| ProcError::Incomplete(None)),
+        |v| Ok(v.parse::<u64>().map_err(|_| ProcError::Incomplete(None))?),
     )
 }
 
@@ -154,7 +154,6 @@ mod test {
     use std::f32::EPSILON;
     use std::path::Path;
 
-    #[allow(clippy::manual_range_contains)]
     fn valid_percentage(value: f32) -> bool {
         value >= 0.00 && value < 100.0
     }

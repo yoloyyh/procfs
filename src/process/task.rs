@@ -18,16 +18,6 @@ pub struct Task {
 }
 
 impl Task {
-    /// Create a new `Task`
-    pub fn new(pid: i32, tid: i32) -> Result<Task, ProcError> {
-        let root = PathBuf::from(format!("/proc/{}/task/{}", pid, tid));
-        if root.exists() {
-            Ok(Task { pid, tid, root })
-        } else {
-            Err(ProcError::NotFound(Some(root)))
-        }
-    }
-
     /// Create a new `Task` inside of the process
     ///
     /// This API is designed to be ergonomic from inside of [`TasksIter`](super::TasksIter)
@@ -76,8 +66,7 @@ mod tests {
 
     #[test]
     #[cfg(not(tarpaulin))] // this test is unstable under tarpaulin, and i'm yet sure why
-    // When this test runs in CI, run it single-threaded
-    fn test_task_runsinglethread() {
+    fn test_task() {
         use std::io::Read;
 
         let me = crate::process::Process::myself().unwrap();

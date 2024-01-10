@@ -32,7 +32,7 @@ This is an approximate list of all the files under the `/proc` mount, and an ind
   * [x] `/proc/[pid]/mountinfo`
   * [ ] `/proc/[pid]/mounts`
   * [x] `/proc/[pid]/mountstats`
-  * [x] `/proc/[pid]/ns/`
+  * [ ] `/proc/[pid]/ns/`
   * [ ] `/proc/[pid]/numa_maps`
   * [ ] `/proc/[pid]/oom_adj`
   * [x] `/proc/[pid]/oom_score`
@@ -100,14 +100,12 @@ This is an approximate list of all the files under the `/proc` mount, and an ind
 * [ ] `/proc/mounts`
 * [ ] `/proc/mtrr`
 * [ ] `/proc/net`
-  * [x] `/proc/net/arp`
+  * [ ] `/proc/net/arp`
   * [x] `/proc/net/dev`
   * [ ] `/proc/net/dev_mcast`
   * [ ] `/proc/net/igmp`
-  * [ ] `/proc/net/ipv6_route`
   * [ ] `/proc/net/rarp`
   * [ ] `/proc/net/raw`
-  * [x] `/proc/net/route`
   * [ ] `/proc/net/snmp`
   * [x] `/proc/net/tcp`
   * [x] `/proc/net/udp`
@@ -115,10 +113,6 @@ This is an approximate list of all the files under the `/proc` mount, and an ind
   * [ ] `/proc/net/netfilter/nfnetlink_queue`
 * [ ] `/proc/partitions`
 * [ ] `/proc/pci`
-* [x] `/proc/pressure`
-  * [x] `/proc/pressure/cpu`
-  * [x] `/proc/pressure/io`
-  * [x] `/proc/pressure/memory`
 * [ ] `/proc/profile`
 * [ ] `/proc/scsi`
 * [ ] `/proc/scsi/scsi`
@@ -183,7 +177,7 @@ This is an approximate list of all the files under the `/proc` mount, and an ind
 	* [ ] `/proc/sys/kernel/msgmnb`
 	* [ ] `/proc/sys/kernel/ngroups_max`
 	* [ ] `/proc/sys/kernel/ns_last_pid`
-	* [x] `/proc/sys/kernel/ostype`
+	* [ ] `/proc/sys/kernel/ostype`
 	* [x] `/proc/sys/kernel/osrelease`
 	* [ ] `/proc/sys/kernel/overflowgid`
 	* [ ] `/proc/sys/kernel/overflowuid`
@@ -220,7 +214,7 @@ This is an approximate list of all the files under the `/proc` mount, and an ind
 	* [x] `/proc/sys/kernel/shmmni`
 	* [ ] `/proc/sys/kernel/sysctl_writes_strict`
 	* [x] `/proc/sys/kernel/sysrq`
-	* [x] `/proc/sys/kernel/version`
+	* [ ] `/proc/sys/kernel/version`
 	* [x] `/proc/sys/kernel/threads-max`
 	* [ ] `/proc/sys/kernel/yama/ptrace_scope`
 	* [ ] `/proc/sys/kernel/zero-paged`

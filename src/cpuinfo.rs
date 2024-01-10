@@ -10,7 +10,7 @@ use std::{collections::HashMap, io::Read};
 /// For common fields, there are methods that will return the data, converted to a more appropriate
 /// data type.  These methods will all return `None` if the field doesn't exist, or is in some
 /// unexpected format (in that case, you'll have to access the string data directly).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CpuInfo {
     /// This stores fields that are common among all CPUs
     pub fields: HashMap<String, String>,
@@ -18,8 +18,7 @@ pub struct CpuInfo {
 }
 
 impl CpuInfo {
-    /// Get CpuInfo from a custom Read instead of the default `/proc/cpuinfo`.
-    pub fn from_reader<R: Read>(r: R) -> ProcResult<CpuInfo> {
+    fn from_reader<R: Read>(r: R) -> ProcResult<CpuInfo> {
         use std::io::{BufRead, BufReader};
 
         let reader = BufReader::new(r);
@@ -30,25 +29,27 @@ impl CpuInfo {
         // the first line of a cpu block must start with "processor"
         let mut found_first = false;
 
-        for line in reader.lines().flatten() {
-            if !line.is_empty() {
-                let mut s = line.split(':');
-                let key = expect!(s.next());
-                if !found_first && key.trim() == "processor" {
-                    found_first = true;
-                }
-                if !found_first {
-                    continue;
-                }
-                if let Some(value) = s.next() {
-                    let key = key.trim().to_owned();
-                    let value = value.trim().to_owned();
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                if !line.is_empty() {
+                    let mut s = line.split(':');
+                    let key = expect!(s.next());
+                    if !found_first && key.trim() == "processor" {
+                        found_first = true;
+                    }
+                    if !found_first {
+                        continue;
+                    }
+                    if let Some(value) = s.next() {
+                        let key = key.trim().to_owned();
+                        let value = value.trim().to_owned();
 
-                    map.get_or_insert(HashMap::new()).insert(key, value);
+                        map.get_or_insert(HashMap::new()).insert(key, value);
+                    }
+                } else if let Some(map) = map.take() {
+                    list.push(map);
+                    found_first = false;
                 }
-            } else if let Some(map) = map.take() {
-                list.push(map);
-                found_first = false;
             }
         }
         if let Some(map) = map.take() {
